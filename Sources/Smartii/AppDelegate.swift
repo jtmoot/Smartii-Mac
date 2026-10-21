@@ -21,14 +21,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     GODMODE: read the entire attached screenshot of the user's screen. Identify the \
     most important question, problem, code, error, or task on screen and answer it \
     directly and completely. If there are multiple questions, answer all of them, \
-    numbered. If it's a multiple-choice question, give the correct letter AND the \
-    reasoning. If it's code or an error, show the fix. Be precise. No filler.
+    numbered. If it's a multiple-choice question, give the correct letter and the \
+    option text only. If it's code or an error, give just the fix. Answers only: \
+    do not restate the questions, no reasoning, no explanations, no filler.
     """
 
     // Generic instruction used when the user submits a screenshot with no typed text.
     private static let screenshotOnlyPrompt = """
     Read the attached screenshot of the user's screen and answer the most important \
-    question or task shown. Be direct and complete.
+    question or task shown. Reply with the answer only: for multiple choice give the \
+    letter and the option text; for short-answer give the value; for code or errors \
+    give just the fix. Do not restate the question and do not explain unless the \
+    question itself asks for an explanation. If there are several questions, answer \
+    each on its own line, numbered.
     """
 
     /// Notification posted by Settings when the user rebinds any hotkey.

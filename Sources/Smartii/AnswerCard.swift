@@ -43,9 +43,11 @@ private final class CardView: NSVisualEffectView {
 // MARK: - AnswerCardController
 
 /// A small, non-activating floating card pinned to the bottom-right corner of the
-/// screen under the mouse. Shows only the latest answer: no transcript, no input
-/// bar, and it never takes keyboard focus away from the frontmost app. Click it,
-/// press its ×, or hit the panic hotkey to dismiss.
+/// screen under the mouse. It stays hidden while the model is working and appears
+/// once, fully formed, with the finished answer — no thinking indicator and no
+/// streaming growth, so nothing moves in the corner until there is something to
+/// read. It shows only the latest answer, never takes keyboard focus away from the
+/// frontmost app, and is dismissed by clicking it, its ×, or the panic hotkey.
 @MainActor
 final class AnswerCardController: NSObject, AnswerSink {
 
@@ -69,10 +71,10 @@ final class AnswerCardController: NSObject, AnswerSink {
     private let closeButton = NSButton()
     private let scroll = NSScrollView()
     private let textView = NSTextView()
-    private let dots = NSView()
     private var textHeightConstraint: NSLayoutConstraint!
 
-    /// Raw markdown accumulated for the current answer.
+    /// Raw markdown accumulated for the in-flight answer. Rendered only when the
+    /// stream finishes.
     private var raw = ""
 
     override init() {
@@ -98,8 +100,9 @@ final class AnswerCardController: NSObject, AnswerSink {
         panel.isReleasedWhenClosed = false
         panel.isMovableByWindowBackground = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.appearance = NSAppearance(named: .darkAqua)
 
+        // Same frosted glass as the chat panel: a behind-window blur that takes on
+        // the colour of whatever is underneath, so the card blends into the page.
         card.material = .hudWindow
         card.blendingMode = .behindWindow
         card.state = .active
@@ -155,12 +158,9 @@ final class AnswerCardController: NSObject, AnswerSink {
         scroll.documentView = textView
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
-        buildDots()
-
         card.addSubview(titleLabel)
         card.addSubview(closeButton)
         card.addSubview(scroll)
-        card.addSubview(dots)
 
         textHeightConstraint = scroll.heightAnchor.constraint(equalToConstant: C.minTextHeight)
         NSLayoutConstraint.activate([
@@ -177,89 +177,37 @@ final class AnswerCardController: NSObject, AnswerSink {
             scroll.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: C.inset),
             scroll.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -C.inset),
             textHeightConstraint,
-
-            dots.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: C.gap + 3),
-            dots.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: C.inset),
         ])
-        dots.isHidden = true
-    }
-
-    /// Three pulsing dots shown while the request is in flight.
-    private func buildDots() {
-        dots.translatesAutoresizingMaskIntoConstraints = false
-        let dotSize: CGFloat = 7
-        let spacing: CGFloat = 6
-        var previous: NSView?
-        for i in 0..<3 {
-            let dot = NSView()
-            dot.wantsLayer = true
-            dot.layer?.backgroundColor = Palette.secondary.cgColor
-            dot.layer?.cornerRadius = dotSize / 2
-            dot.translatesAutoresizingMaskIntoConstraints = false
-            dots.addSubview(dot)
-            NSLayoutConstraint.activate([
-                dot.widthAnchor.constraint(equalToConstant: dotSize),
-                dot.heightAnchor.constraint(equalToConstant: dotSize),
-                dot.centerYAnchor.constraint(equalTo: dots.centerYAnchor),
-            ])
-            if let previous {
-                dot.leadingAnchor.constraint(equalTo: previous.trailingAnchor, constant: spacing).isActive = true
-            } else {
-                dot.leadingAnchor.constraint(equalTo: dots.leadingAnchor).isActive = true
-            }
-            previous = dot
-
-            let pulse = CABasicAnimation(keyPath: "opacity")
-            pulse.fromValue = 0.25
-            pulse.toValue = 1.0
-            pulse.duration = 0.6
-            pulse.autoreverses = true
-            pulse.repeatCount = .infinity
-            pulse.beginTime = CACurrentMediaTime() + Double(i) * 0.2
-            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            dot.layer?.add(pulse, forKey: "pulse")
-        }
-        if let last = previous {
-            last.trailingAnchor.constraint(equalTo: dots.trailingAnchor).isActive = true
-        }
-        dots.heightAnchor.constraint(equalToConstant: dotSize).isActive = true
     }
 
     // MARK: AnswerSink
+    //
+    // Nothing is shown until the answer is complete: a new request hides any
+    // previous card, deltas only accumulate, and the card appears once at the end.
 
     func setThinking(_ on: Bool) {
         if on {
             raw = ""
-            textView.textStorage?.setAttributedString(NSAttributedString(string: ""))
-            scroll.isHidden = true
-            dots.isHidden = false
-            layout(textHeight: C.minTextHeight)
-            show()
-        } else {
-            dots.isHidden = true
-            scroll.isHidden = false
+            hide()
         }
     }
 
     func beginStreaming() {
         raw = ""
-        setThinking(false)
-        render()
-        show()
     }
 
     func appendDelta(_ s: String) {
         raw += s
-        render()
     }
 
     func endStreaming() {
+        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         render()
         scrollToTop()
+        show()
     }
 
     func showAnswer(_ text: String) {
-        setThinking(false)
         raw = text
         render()
         scrollToTop()
@@ -267,13 +215,13 @@ final class AnswerCardController: NSObject, AnswerSink {
     }
 
     func showError(_ message: String) {
-        setThinking(false)
         raw = ""
         let attr = NSAttributedString(string: "⚠︎ \(message)", attributes: [
             .foregroundColor: C.error,
             .font: NSFont.systemFont(ofSize: C.fontSize),
         ])
         apply(attr)
+        scrollToTop()
         show()
     }
 
@@ -283,17 +231,14 @@ final class AnswerCardController: NSObject, AnswerSink {
         panel.orderOut(nil)
     }
 
+    /// Fade the fully laid-out card in at its corner position.
     private func show() {
-        if !panel.isVisible {
-            panel.alphaValue = 0
-            position(height: panel.frame.height)
-            panel.orderFrontRegardless()
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.18
-                panel.animator().alphaValue = 1
-            }
-        } else {
-            panel.orderFrontRegardless()
+        panel.alphaValue = 0
+        position(height: panel.frame.height)
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.18
+            panel.animator().alphaValue = 1
         }
     }
 
@@ -301,7 +246,7 @@ final class AnswerCardController: NSObject, AnswerSink {
 
     // MARK: Rendering
 
-    /// Re-render `raw` as styled text. Markdown runs use the app's renderer; fenced
+    /// Render `raw` as styled text. Markdown runs use the app's renderer; fenced
     /// code blocks are set in monospace on a subtle field-coloured background.
     private func render() {
         let out = NSMutableAttributedString()
