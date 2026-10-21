@@ -1150,8 +1150,7 @@ final class BarController: NSObject, NSTextFieldDelegate {
         row.addSubview(bubble)
         NSLayoutConstraint.activate([
             bubble.topAnchor.constraint(equalTo: row.topAnchor),
-            bubble.bottomAnchor.constraint(equalTo: row.bottomAnchor),
-            row.widthAnchor.constraint(equalTo: transcriptStack.widthAnchor)
+            bubble.bottomAnchor.constraint(equalTo: row.bottomAnchor)
         ])
         if alignRight {
             bubble.trailingAnchor.constraint(equalTo: row.trailingAnchor).isActive = true
@@ -1351,7 +1350,16 @@ final class BarController: NSObject, NSTextFieldDelegate {
         } else {
             transcriptStack.addArrangedSubview(row)
         }
+        pinRowWidth(row)
         transcript.append(row)
+    }
+
+    /// Pin a transcript row to the stack width. Must run only after the row is in
+    /// `transcriptStack`: activating a constraint between views with no common
+    /// ancestor throws an exception (fatal on macOS 26), which silently aborted
+    /// every Send / Solve before the request was built.
+    private func pinRowWidth(_ row: NSView) {
+        row.widthAnchor.constraint(equalTo: transcriptStack.widthAnchor).isActive = true
     }
 
     // MARK: Thinking bubble
@@ -1413,6 +1421,7 @@ final class BarController: NSObject, NSTextFieldDelegate {
         guard thinkingBubble == nil else { return }
         let row = makeThinkingBubble()
         transcriptStack.addArrangedSubview(row)
+        pinRowWidth(row)
         thinkingBubble = row
     }
 
