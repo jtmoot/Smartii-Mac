@@ -171,7 +171,7 @@ final class SmartiiLogo: NSView {
 /// code, bullet/numbered lists, blockquotes, and links — into an attributed
 /// string suitable for an assistant bubble. Fenced code blocks are handled
 /// separately by the bubble builder (see `splitFences`).
-private enum Markdown {
+enum Markdown {
 
     /// Splits raw text into ordered segments: plain markdown runs and fenced code
     /// blocks (``` ... ```), preserving the language tag when present.
@@ -437,7 +437,7 @@ private enum Markdown {
 /// changes, so the input pill never jumps. When the user has moved/sized the panel
 /// itself we persist & restore that frame instead.
 @MainActor
-final class BarController: NSObject, NSTextFieldDelegate {
+final class BarController: NSObject, NSTextFieldDelegate, AnswerSink {
 
     // MARK: Public API (callbacks wired up by AppDelegate — DO NOT change signatures)
 

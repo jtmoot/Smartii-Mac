@@ -36,6 +36,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem?
     private let bar = BarController()
+    private let card = AnswerCardController()
+
+    /// Where a solve shows its answer: the full chat panel, or the compact corner
+    /// card (hotkey / menu screenshot solves, when enabled in Settings).
+    enum AnswerPresentation { case panel, card }
     private let settingsController = SettingsWindowController()
     private let welcomeController = WelcomeWindowController()
     private let historyController = HistoryWindowController()
@@ -267,10 +272,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The panel hands us the typed text and whether it was a Solve (screenshot) submit.
         bar.onSubmit = { [weak self] text, includeScreenshot in
             Sound.send()
-            self?.solve(text: text, includeScreenshot: includeScreenshot)
+            self?.solve(text: text, includeScreenshot: includeScreenshot, presentation: .panel)
         }
         bar.onGodmode = { [weak self] in
-            self?.godmode()
+            self?.godmode(presentation: .panel)
         }
         bar.onOpenSettings = { [weak self] in
             self?.settingsController.show()
@@ -286,7 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // User chose region capture from the panel.
         bar.onRegionSolve = { [weak self] in
-            self?.solveRegion()
+            self?.solveRegion(presentation: .panel)
         }
     }
 
@@ -322,6 +327,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bind(.panic) { [weak self] in
             self?.cancelStream()
             self?.bar.hidePanel()
+            self?.card.hide()
         }
     }
 
@@ -351,13 +357,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Capture the whole screen and solve it with no typed prompt.
-    func solveScreen() {
-        solve(text: "", includeScreenshot: true)
+    func solveScreen(presentation: AnswerPresentation = .card) {
+        solve(text: "", includeScreenshot: true, presentation: presentation)
+    }
+
+    /// Pick the surface for `presentation`, hiding the chat panel when the card wins.
+    private func sink(for presentation: AnswerPresentation) -> AnswerSink {
+        if presentation == .card && Settings.shared.compactScreenshotAnswers {
+            bar.hidePanel()
+            return card
+        }
+        return bar
     }
 
     /// Capture a user-selected region of the screen and solve it.
-    func solveRegion() {
+    func solveRegion(presentation: AnswerPresentation = .card) {
         Task { @MainActor in
+            let sink = self.sink(for: presentation)
             // Hide the panel so it isn't part of the region selection, give the
             // window server a beat, then show the drag-to-select overlay.
             bar.hidePanel()
@@ -369,13 +385,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             runSolve(text: AppDelegate.screenshotOnlyPrompt,
                      imageDataURL: imageDataURL,
-                     isGodmode: false)
+                     isGodmode: false,
+                     sink: sink)
         }
     }
 
     /// Godmode — screenshot the screen and run the verbatim GODMODE prompt.
-    func godmode() {
-        solve(text: AppDelegate.godmodePrompt, includeScreenshot: true, isGodmode: true)
+    func godmode(presentation: AnswerPresentation = .card) {
+        solve(text: AppDelegate.godmodePrompt, includeScreenshot: true, isGodmode: true, presentation: presentation)
     }
 
     /// Optionally screenshot the screen, then run the streaming solve.
@@ -395,9 +412,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return msg
     }
 
-    func solve(text: String, includeScreenshot: Bool, isGodmode: Bool = false) {
+    func solve(text: String, includeScreenshot: Bool, isGodmode: Bool = false,
+               presentation: AnswerPresentation = .panel) {
         Task { @MainActor in
             let settings = Settings.shared
+            let sink = self.sink(for: presentation)
             let providerId = settings.providerId
 
             // Require an API key for the chosen provider (Ollama runs keyless).
@@ -419,7 +438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 let img = await Screenshot.captureMainDisplay()
                 guard let img else {
-                    bar.showError("Couldn't capture the screen. Grant Screen Recording "
+                    sink.showError("Couldn't capture the screen. Grant Screen Recording "
                                   + "permission in System Settings → Privacy & Security → "
                                   + "Screen Recording, then try again.")
                     return
@@ -429,7 +448,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             runSolve(text: text,
                      imageDataURL: imageDataURL,
-                     isGodmode: isGodmode)
+                     isGodmode: isGodmode,
+                     sink: sink)
         }
     }
 
@@ -443,7 +463,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the transcript reads coherently without extra plumbing here.
     private func runSolve(text: String,
                           imageDataURL: String?,
-                          isGodmode: Bool) {
+                          isGodmode: Bool,
+                          sink: AnswerSink) {
         let settings = Settings.shared
         let providerId = settings.providerId
         let apiKey = settings.apiKey(for: providerId) ?? ""
@@ -466,7 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Replace any in-flight stream.
         cancelStream()
 
-        bar.setThinking(true)
+        sink.setThinking(true)
 
         // MainActor-isolated streaming state, mutated only on the MainActor.
         let state = StreamState()
@@ -503,17 +524,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     try Task.checkCancellation()
                     if !state.started {
                         state.started = true
-                        self.bar.setThinking(false)
-                        self.bar.beginStreaming()
+                        sink.setThinking(false)
+                        sink.beginStreaming()
                     }
                     state.accumulated += delta
-                    self.bar.appendDelta(delta)
+                    sink.appendDelta(delta)
                 }
 
                 // The stream may be cancelled between the last delta and here.
                 try Task.checkCancellation()
 
-                if state.started { self.bar.endStreaming() }
+                if state.started { sink.endStreaming() }
 
                 if state.accumulated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     // Streaming produced no visible text — common with reasoning
@@ -522,8 +543,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let answer = try await Providers.call(
                         providerId: providerId, apiKey: apiKey, prompt: prompt,
                         imageDataURL: imageDataURL, model: model)
-                    self.bar.setThinking(false)
-                    self.bar.showAnswer(answer)
+                    sink.setThinking(false)
+                    sink.showAnswer(answer)
                     self.finishAnswer(question: historyQuestion, answer: answer, isGodmode: isGodmode)
                 } else {
                     self.finishAnswer(question: historyQuestion,
@@ -532,25 +553,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch is CancellationError {
                 // User pressed Stop / Panic / started a new request: finalize quietly.
-                if state.started { self.bar.endStreaming() }
-                self.bar.setThinking(false)
+                if state.started { sink.endStreaming() }
+                sink.setThinking(false)
             } catch {
                 // Streaming failed — try one normal (non-streaming) request before
                 // surfacing the error, so an SSE-specific hiccup doesn't block the chat.
-                if state.started { self.bar.endStreaming() }
+                if state.started { sink.endStreaming() }
                 do {
                     try Task.checkCancellation()
                     let answer = try await Providers.call(
                         providerId: providerId, apiKey: apiKey, prompt: prompt,
                         imageDataURL: imageDataURL, model: model)
-                    self.bar.setThinking(false)
-                    self.bar.showAnswer(answer)
+                    sink.setThinking(false)
+                    sink.showAnswer(answer)
                     self.finishAnswer(question: historyQuestion, answer: answer, isGodmode: isGodmode)
                 } catch is CancellationError {
-                    self.bar.setThinking(false)
+                    sink.setThinking(false)
                 } catch let fallbackError {
-                    self.bar.setThinking(false)
-                    self.bar.showError(self.friendlyError(fallbackError))
+                    sink.setThinking(false)
+                    sink.showError(self.friendlyError(fallbackError))
                 }
             }
             self.streamTask = nil

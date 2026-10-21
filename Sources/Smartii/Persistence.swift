@@ -126,6 +126,7 @@ final class Settings {
         static let sendContext = "sendContext"
         static let godmodeAutofill = "godmodeAutofill"
         static let panelFrame = "panelFrame"
+        static let compactScreenshotAnswers = "compactScreenshotAnswers"
 
         /// UserDefaults keys for a hot key's keyCode / modifiers.
         static func hotKeyCode(_ action: HotKeyAction) -> String {
@@ -166,6 +167,16 @@ final class Settings {
             return defaults.bool(forKey: Key.autoCopyAnswer)
         }
         set { defaults.set(newValue, forKey: Key.autoCopyAnswer) }
+    }
+
+    /// Show hotkey / menu screenshot answers in the compact corner card instead of
+    /// the chat panel. Defaults to true when the key has never been written.
+    var compactScreenshotAnswers: Bool {
+        get {
+            if defaults.object(forKey: Key.compactScreenshotAnswers) == nil { return true }
+            return defaults.bool(forKey: Key.compactScreenshotAnswers)
+        }
+        set { defaults.set(newValue, forKey: Key.compactScreenshotAnswers) }
     }
 
     /// Read the API key for a provider from the Keychain.

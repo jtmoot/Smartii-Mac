@@ -27,6 +27,7 @@ final class SettingsWindowController: NSObject {
     private let soundsCheckbox = NSButton(checkboxWithTitle: "Play sounds", target: nil, action: nil)
     private let contextCheckbox = NSButton(checkboxWithTitle: "Send recent messages for context", target: nil, action: nil)
     private let godmodeCheckbox = NSButton(checkboxWithTitle: "Godmode types the answer into the focused field", target: nil, action: nil)
+    private let compactCheckbox = NSButton(checkboxWithTitle: "Show screenshot answers in a small corner card", target: nil, action: nil)
     private let launchCheckbox = NSButton(checkboxWithTitle: "Launch Smartii at login", target: nil, action: nil)
     private let getKeyButton = NSButton()
     private let testKeyButton = NSButton()
@@ -252,7 +253,7 @@ final class SettingsWindowController: NSObject {
         modelPopup.widthAnchor.constraint(equalToConstant: S.contentW).isActive = true
 
         // Checkboxes.
-        for box in [copyCheckbox, soundsCheckbox, contextCheckbox, godmodeCheckbox, launchCheckbox] {
+        for box in [copyCheckbox, soundsCheckbox, contextCheckbox, godmodeCheckbox, compactCheckbox, launchCheckbox] {
             box.target = self
             if let cell = box.cell as? NSButtonCell { cell.font = .systemFont(ofSize: 13) }
             box.contentTintColor = Palette.text
@@ -293,6 +294,7 @@ final class SettingsWindowController: NSObject {
             soundsCheckbox,
             contextCheckbox,
             godmodeCheckbox,
+            compactCheckbox,
             launchCheckbox,
             spacer(6),
             permissions,
@@ -523,6 +525,7 @@ final class SettingsWindowController: NSObject {
         soundsCheckbox.state = settings.soundsEnabled ? .on : .off
         contextCheckbox.state = settings.sendContext ? .on : .off
         godmodeCheckbox.state = settings.godmodeAutofill ? .on : .off
+        compactCheckbox.state = settings.compactScreenshotAnswers ? .on : .off
         launchCheckbox.state = settings.launchAtLogin ? .on : .off
         statusLabel.stringValue = ""
         testKeyStatus.stringValue = ""
@@ -673,6 +676,7 @@ final class SettingsWindowController: NSObject {
         settings.soundsEnabled = (soundsCheckbox.state == .on)
         settings.sendContext = (contextCheckbox.state == .on)
         settings.godmodeAutofill = (godmodeCheckbox.state == .on)
+        settings.compactScreenshotAnswers = (compactCheckbox.state == .on)
         let key = liveKey()
         if !key.isEmpty { settings.setAPIKey(key, for: id) }
         statusLabel.stringValue = "Saved ✓"
