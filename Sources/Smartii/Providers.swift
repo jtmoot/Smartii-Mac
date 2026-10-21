@@ -94,11 +94,12 @@ enum Providers {
             id: "anthropic",
             label: "Anthropic Claude",
             tier: "paid",
-            defaultModel: "claude-sonnet-4-6",
+            defaultModel: "claude-opus-5-5",
             models: [
-                "claude-opus-4-7",
-                "claude-sonnet-4-6",
-                "claude-haiku-4-5-20251001",
+                "claude-fable-5-1",
+                "claude-opus-5-5",
+                "claude-sonnet-5-5",
+                "claude-haiku-5-5",
             ],
             keyURL: "https://console.anthropic.com/settings/keys",
             instructions: "Paid API key. Every Claude model can read screenshots."
@@ -551,12 +552,9 @@ enum Providers {
             content = prompt
         }
 
-        let body: [String: Any] = [
-            "model": model,
-            "max_tokens": 2048,
-            "stream": true,
-            "messages": [["role": "user", "content": content]],
-        ]
+        var body = anthropicBaseBody(model: model)
+        body["stream"] = true
+        body["messages"] = [["role": "user", "content": content]]
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -622,6 +620,32 @@ enum Providers {
         }
     }
 
+    // MARK: - Anthropic request shape
+
+    /// Shared Claude request body: adaptive thinking at high effort so the model
+    /// reasons before it answers (the visible reply stays short), a generous output
+    /// cap, and Anthropic's server-side refusal fallback where the model supports it.
+    private static func anthropicBaseBody(model: String) -> [String: Any] {
+        var body: [String: Any] = [
+            "model": model,
+            "max_tokens": 16000,
+            "thinking": ["type": "adaptive"],
+            "output_config": ["effort": "high"],
+        ]
+        if anthropicSupportsFallbacks(model) { body["fallbacks"] = "default" }
+        return body
+    }
+
+    /// `fallbacks: "default"` is accepted on the Fable 5.x, Opus 5.x and Sonnet 5.5 lines.
+    private static func anthropicSupportsFallbacks(_ model: String) -> Bool {
+        model.hasPrefix("claude-fable-5") || model.hasPrefix("claude-opus-5") || model.hasPrefix("claude-sonnet-5-5")
+    }
+
+    private static func anthropicRefusalMessage(category: String?) -> String {
+        let reason = category.map { " (\($0))" } ?? ""
+        return "Claude declined this request\(reason)."
+    }
+
     // MARK: - Anthropic streaming
 
     private static func streamAnthropic(
@@ -655,6 +679,9 @@ enum Providers {
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("true", forHTTPHeaderField: "anthropic-dangerous-direct-browser-access")
+        if anthropicSupportsFallbacks(model) {
+            request.setValue("server-side-fallback-2026-07-01", forHTTPHeaderField: "anthropic-beta")
+        }
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.httpBody = try serialize(body)
 
@@ -664,6 +691,12 @@ enum Providers {
             if let type = obj["type"] as? String, type == "error",
                let err = obj["error"] as? [String: Any], let msg = err["message"] as? String {
                 throw SmartiiError.message(msg)
+            }
+            // A safety-classifier decline ends the stream with stop_reason "refusal".
+            if let type = obj["type"] as? String, type == "message_delta",
+               let md = obj["delta"] as? [String: Any],
+               let stop = md["stop_reason"] as? String, stop == "refusal" {
+                throw SmartiiError.message(anthropicRefusalMessage(category: nil))
             }
             // We only care about content_block_delta → delta.text.
             guard let type = obj["type"] as? String, type == "content_block_delta",
@@ -785,11 +818,8 @@ enum Providers {
             content = [["type": "text", "text": prompt]]
         }
 
-        let body: [String: Any] = [
-            "model": model,
-            "max_tokens": 2048,
-            "messages": [["role": "user", "content": content]],
-        ]
+        var body = anthropicBaseBody(model: model)
+        body["messages"] = [["role": "user", "content": content]]
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -797,10 +827,18 @@ enum Providers {
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("true", forHTTPHeaderField: "anthropic-dangerous-direct-browser-access")
+        if anthropicSupportsFallbacks(model) {
+            request.setValue("server-side-fallback-2026-07-01", forHTTPHeaderField: "anthropic-beta")
+        }
         request.httpBody = try serialize(body)
 
         let data = try await send(request)
         let obj = try parseObject(data)
+
+        if let stop = obj["stop_reason"] as? String, stop == "refusal" {
+            let category = (obj["stop_details"] as? [String: Any])?["category"] as? String
+            throw SmartiiError.message(anthropicRefusalMessage(category: category))
+        }
 
         // content[].text joined.
         guard let blocks = obj["content"] as? [[String: Any]] else {
